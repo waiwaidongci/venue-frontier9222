@@ -19,9 +19,9 @@ docker compose exec -T backend python -m scripts.seed_demo
 
 | 邮箱 | 角色 | 页面与动作 |
 |---|---|---|
-| admin@qiyuan.demo | admin / 评议负责人 | 六页；登记、导入、求解、提案、审阅批准、下载 |
-| analyst@qiyuan.demo | analyst / 场馆分析员 | 六页；登记、导入、求解、提案、下载；不能批准 |
-| viewer@qiyuan.demo | viewer / 机构联络员 | 六页只读，可下载获批机构评议CSV；不能写入或批准 |
+| admin@qiyuan.demo | admin / 评议负责人 | 七页；登记、导入、求解（CCR与共同权重）、提案、审阅批准、下载 |
+| analyst@qiyuan.demo | analyst / 场馆分析员 | 七页；登记、导入、求解、提案、下载；不能批准 |
+| viewer@qiyuan.demo | viewer / 机构联络员 | 七页只读，可下载获批机构评议CSV与共同权重名次CSV；不能写入或批准 |
 
 JWT有效期8小时，密码带盐PBKDF2-SHA256；独立审计与错误中间件，登录每来源每分钟最多30次。对外部署前更换演示凭证与JWT密钥。
 
@@ -57,6 +57,18 @@ min θ
 
 求解采用SciPy `linprog(method='highs')`；0最优、2不可行、3无界等状态分别保存，不给失败情景填假θ。正投入和θ非负的有效模型不可能向负无穷无界；仍显式处理求解器返回状态。固定θ的第二阶段失败也不会冒充完成。实际状态码口径参照[SciPy linprog官方文档](https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.linprog.html)。
 
+## 共同权重名次研究的口径
+
+CCR允许每馆各自选择最有利权重，馆间名次难以横比。共同权重研究改用**全馆同一组权重**：对选定的每项产出/投入组合计算比值（如到访人次/人员工时），每个比值按同期该列最大值归一到[0,1]，得到矩阵R；全馆共用一组非负、合计为一、可逐列设置上下限的权重w，得分s=R·w。
+
+对每个场馆i，在全部可行权重下求其**最好名次与最差名次**（总序：分高者在前，数值同分按机构编号升序裁决）。求解用SciPy `milp`（HiGHS混合整数规划）：为每个对手j引入二元击败指示变量z，大编号场馆仅在严格分高时z=1，小编号场馆同分时凭编号胜出；通过两组big-M指示约束把总序编码进MILP，目标分别最小化/最大化击败数。不做网格采样、不枚举权重排列，3–100馆均可求解，典型百馆四比值在约10秒内完成。
+
+- **近乎同分按实际分数裁决**：归一矩阵先按12位小数规范化（吸收单位换算的1e-16级浮点噪声），分差小于1e-9视为数值同分并按机构编号裁决；每次MILP解出的权重都用总序规则独立重算名次校验，指示不一致时在权重空间加精确锁定约束重解，锁定后不可行即证明上一名次为极端值。
+- **权重上下限**：每列可设[0,1]内上下限，提交前校验非负、上限不小于下限、下限合计≤1≤上限合计，不相容区间直接拒绝。
+- **超时降级**：每馆带整体时间预算（默认60秒，页面可配1–180秒）。预算到期未证明的档案标记`degraded`（未完成/已降级），逐馆保留**已证明的名次界限**（最好/最差各自的下界–上界）与求解器状态作为依据，未开始的场馆保留1..n平凡界限，绝不填造名次。
+- **可核对**：原始比值、各列最大值、归一矩阵、实现极端名次的权重向量与该权重下全馆得分、研究指纹SHA256均随档案保存；提供名次CSV下载。单位换算（如能源费用元↔千元）不改变归一矩阵，因而名次不变，离线测试覆盖该不变性、窄权重区间、同分裁决、百馆性能与降级。
+- 离线验收：`python -m tests.test_common_weight`（9项，无需数据库）。
+
 ## 失败态、边界与复算
 
 - 零/负投入、负产出、非有限值、重复观察、空参照、样本不足、非法字段均拒绝。全零产出目标在数学上θ=0且明确标记，不解释为实际可将所有投入归零。
@@ -67,7 +79,7 @@ min θ
 
 ## 页面、实体与共享组件
 
-六页：研究总览、同期样本、效率求解、参照与敏感性、改进假设、评议留痕。五核心实体BenchmarkSet、Venue、PeriodObservation、EfficiencyRun、ImprovementCase各有model/schema/service/controller/route/前端API/store/页面链路。
+七页：研究总览、同期样本、效率求解（CCR）、共同权重、共同权重名次、参照与敏感性、改进假设、评议留痕（共同权重拆为建立与名次两个页面，故导航共七条）。五核心实体BenchmarkSet、Venue、PeriodObservation、EfficiencyRun、ImprovementCase各有model/schema/service/controller/route/前端API/store/页面链路。EfficiencyRun以`kind`区分`dea`与`common_weight`，后者额外保存权重上下限、时间预算与降级状态。
 
 共用业务组件BenchmarkSelect、EfficiencyPlot、FrontierSummary、RunTable；通用PageHeading/StatusBadge/ErrorNotice/EmptyState。useTask管理恢复状态，usePolling只刷新运行中研究，createStore使用React原生useSyncExternalStore。
 
@@ -79,7 +91,7 @@ min θ
 |---|---|
 | frontend | React18.3.1、TypeScript、Vite6.4.6内置esbuild automatic JSX、Nginx1.27 |
 | backend | Python3.11、FastAPI、SQLAlchemy、psycopg3、PyJWT |
-| 算法 | NumPy、SciPy1.17.1/HiGHS两阶段线性规划 |
+| 算法 | NumPy、SciPy1.17.1/HiGHS两阶段线性规划；共同权重名次用HiGHS混合整数规划（milp） |
 | worker | 单Python消费者；DB任务状态为事实源，Redis唤醒并恢复queued/running |
 | db/redis | PostgreSQL16、Redis7 AOF |
 

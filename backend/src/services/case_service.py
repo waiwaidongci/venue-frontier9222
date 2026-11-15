@@ -7,6 +7,7 @@ def list_cases(db):return db.scalars(select(ImprovementCase).order_by(Improvemen
 def create_case(db,data):
     run=db.get(EfficiencyRun,data.run_id)
     if not run or run.status!=RunStatus.COMPLETED:raise HTTPException(422,'请选择已完成研究')
+    if run.kind=='common_weight':raise HTTPException(422,'共同权重名次研究不产出CCR投影，不能直接建立改进假设；请选择CCR效率研究')
     target=next((r for r in run.result['baseline'] if r['observation_id']==data.observation_id),None)
     if not target:raise HTTPException(422,'机构观察不属于该研究的同期目标集')
     if db.scalar(select(ImprovementCase).where(ImprovementCase.title==data.title)):raise HTTPException(409,'假设标题已存在')

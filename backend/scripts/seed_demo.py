@@ -28,7 +28,10 @@ def seed():
             runname=period+' · 双投入双产出CCR'
             if not db.scalar(select(EfficiencyRun).where(EfficiencyRun.name==runname)):
                 run=EfficiencyRun(name=runname,benchmark_id=benchmark.id,inputs=['staff_hours','energy_cost'],outputs=['visits','programs'],sensitivity_count=3,status='queued');db.add(run);db.commit();execute_run(db,run.id)
-        latest=db.scalar(select(EfficiencyRun).order_by(EfficiencyRun.id.desc()))
+            cwname=period+' · 共同权重名次边界'
+            if not db.scalar(select(EfficiencyRun).where(EfficiencyRun.name==cwname)):
+                cwrun=EfficiencyRun(name=cwname,benchmark_id=benchmark.id,kind='common_weight',inputs=['staff_hours'],outputs=['visits','programs'],sensitivity_count=3,weight_lower=[0.0,0.0],weight_upper=[1.0,1.0],time_budget=60.0,status='queued');db.add(cwrun);db.commit();execute_run(db,cwrun.id)
+        latest=db.scalar(select(EfficiencyRun).where(EfficiencyRun.kind=='dea').order_by(EfficiencyRun.id.desc()))
         if latest and latest.status=='completed' and not db.scalar(select(ImprovementCase).where(ImprovementCase.title=='水岸青年馆 · 开放时段与照明排程复核')):
             target=next(r for r in latest.result['baseline'] if r['venue_code']=='QY-05')
             db.add(ImprovementCase(title='水岸青年馆 · 开放时段与照明排程复核',run_id=latest.id,observation_id=target['observation_id'],hypothesis='先复核同期开馆工时与照明排程的统计边界，再用活动日观察验证投入缩减假设。',verification='由机构联络员核对季度口径，安排两周现场观察；不作为个人绩效、自动拨款或直接预算削减依据。',status='approved',approved_by='admin@qiyuan.demo'))
